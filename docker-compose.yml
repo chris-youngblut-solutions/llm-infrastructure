@@ -1,0 +1,390 @@
+# LLM Infrastructure Docker Compose
+# 
+# 🔒 SECURITY: All secrets are in .env file (NOT committed to git)
+# Copy .env.example to .env and fill in your values
+#
+# Architecture:
+# - Router: Central request handler (manages model lifecycle)
+# - vLLM Containers: GPU-based inference (started on-demand by router)
+# - n8n + Postgres: Workflow automation
+# - OpenWebUI: Web interface for chat
+
+version: '3.8'
+
+networks:
+  llm_net:
+    driver: bridge
+  n8n_net:
+    driver: bridge
+
+services:
+  # =========================
+  # Router - Control Plane
+  # =========================
+  router:
+    build: ./router
+    container_name: router
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - ROUTER_API_KEY=${ROUTER_API_KEY}
+      - MODEL_BASE_PATH=${MODEL_BASE_PATH}
+      - N8N_API_KEY=${N8N_API_KEY}
+      - WEBUI_API_KEY=${WEBUI_API_KEY}
+    volumes:
+      - ${MODEL_BASE_PATH}:/models:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - llm_net
+      - n8n_net
+    restart: unless-stopped
+
+  # =========================
+  # vLLM Model Containers - GPU 0 (Long Context)
+  # Managed dynamically by router
+  # =========================
+  llama_0:
+    image: vllm/vllm-openai:latest
+    container_name: llama_0
+    restart: "no"
+    profiles: ["llama_0"]
+    cpuset: "0-7"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+    command: >
+      --model /weights/llama31-8b-instruct
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 32768
+      --max-num-seqs 2
+      --gpu-memory-utilization 0.90
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name llama31-8b-instruct
+    networks: [llm_net]
+
+  r1_0:
+    image: vllm/vllm-openai:latest
+    container_name: r1_0
+    restart: "no"
+    profiles: ["r1_0"]
+    cpuset: "0-7"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HOME=/cache/huggingface
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+      - ${MODEL_BASE_PATH}/hf:/cache/huggingface
+    command: >
+      --model /weights/deepseek-r1-8b
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 24576
+      --max-num-seqs 2
+      --gpu-memory-utilization 0.88
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name deepseek-r1-8b
+    networks: [llm_net]
+
+  qwen_0:
+    image: vllm/vllm-openai:latest
+    container_name: qwen_0
+    restart: "no"
+    profiles: ["qwen_0"]
+    cpuset: "0-7"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HOME=/cache/huggingface
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+      - ${MODEL_BASE_PATH}/hf:/cache/huggingface
+    command: >
+      --model /weights/qwen-coder-7b
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 16384
+      --max-num-seqs 3
+      --gpu-memory-utilization 0.88
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name qwen-coder-7b
+    networks: [llm_net]
+
+  # =========================
+  # vLLM Model Containers - GPU 1 (Throughput)
+  # =========================
+  llama_1:
+    image: vllm/vllm-openai:latest
+    container_name: llama_1
+    restart: "no"
+    profiles: ["llama_1"]
+    cpuset: "8-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+    command: >
+      --model /weights/llama31-8b-instruct
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 8192
+      --max-num-seqs 6
+      --gpu-memory-utilization 0.90
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name llama31-8b-instruct
+    networks: [llm_net]
+
+  r1_1:
+    image: vllm/vllm-openai:latest
+    container_name: r1_1
+    restart: "no"
+    profiles: ["r1_1"]
+    cpuset: "8-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - HF_HOME=/cache/huggingface
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+      - ${MODEL_BASE_PATH}/hf:/cache/huggingface
+    command: >
+      --model /weights/deepseek-r1-8b
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 8192
+      --max-num-seqs 4
+      --gpu-memory-utilization 0.88
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name deepseek-r1-8b
+    networks: [llm_net]
+
+  qwen_1:
+    image: vllm/vllm-openai:latest
+    container_name: qwen_1
+    restart: "no"
+    profiles: ["qwen_1"]
+    cpuset: "8-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - HF_HOME=/cache/huggingface
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+      - ${MODEL_BASE_PATH}/hf:/cache/huggingface
+    command: >
+      --model /weights/qwen-coder-7b
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 8192
+      --max-num-seqs 5
+      --gpu-memory-utilization 0.88
+      --enable-prefix-caching
+      --disable-log-requests
+      --served-model-name qwen-coder-7b
+    networks: [llm_net]
+
+  # =========================
+  # GPU 1 - Embeddings & Reranking
+  # =========================
+  bge_embed_1:
+    image: vllm/vllm-openai:latest
+    container_name: bge_embed_1
+    restart: "no"
+    profiles: ["bge_embed_1"]
+    cpuset: "8-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+    command: >
+      --model /weights/bge-m3
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 8192
+      --gpu-memory-utilization 0.85
+      --disable-log-requests
+      --served-model-name bge-m3
+    networks: [llm_net]
+
+  bge_reranker_1:
+    image: vllm/vllm-openai:latest
+    container_name: bge_reranker_1
+    restart: "no"
+    profiles: ["bge_reranker_1"]
+    cpuset: "8-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+    command: >
+      --model /weights/bge-reranker
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 4096
+      --gpu-memory-utilization 0.85
+      --disable-log-requests
+      --served-model-name bge-reranker
+    networks: [llm_net]
+
+  # =========================
+  # Qwen 72B - Dual GPU (Night Mode)
+  # =========================
+  qwen_72b:
+    image: vllm/vllm-openai:latest
+    container_name: qwen_72b
+    restart: "no"
+    profiles: ["qwen_72b"]
+    cpuset: "0-15"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1']
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1
+      - HF_HOME=/cache/huggingface
+    volumes:
+      - ${MODEL_BASE_PATH}:/weights:ro
+      - ${MODEL_BASE_PATH}/hf:/cache/huggingface
+    command: >
+      --model /weights/qwen2.5-72b-instruct-awq
+      --host 0.0.0.0
+      --port 9000
+      --tensor-parallel-size 2
+      --max-model-len 14000
+      --max-num-seqs 1
+      --gpu-memory-utilization 0.95
+      --quantization awq
+      --enforce-eager
+      --disable-log-requests
+      --served-model-name qwen-72b-instruct
+    networks: [llm_net]
+
+  # =========================
+  # PostgreSQL for n8n
+  # =========================
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    networks:
+      - n8n_net
+    restart: unless-stopped
+
+  # =========================
+  # n8n Workflow Automation
+  # =========================
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_PORT=5678
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_API_KEY=${N8N_API_KEY}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Chicago}
+    volumes:
+      - ./n8n-data:/home/node/.n8n
+    networks:
+      - n8n_net
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # =========================
+  # OpenWebUI
+  # =========================
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:latest
+    container_name: openwebui
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - WEBUI_API_KEY=${WEBUI_API_KEY}
+      - OPENAI_API_BASE_URL=http://router:8000/v1
+      - OPENAI_API_KEY=${WEBUI_API_KEY}
+    volumes:
+      - ./webui-data:/app/backend/data
+    networks:
+      - llm_net
+    restart: unless-stopped
+
+# =========================
+# Notes
+# =========================
+# - vLLM containers use profiles and are started on-demand by the router
+# - Router manages model lifecycle via Docker API
+# - All sensitive values come from .env (not committed to git)
+# - Services bind to 127.0.0.1 (localhost only, access via Tailscale)
