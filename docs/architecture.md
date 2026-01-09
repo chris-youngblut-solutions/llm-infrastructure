@@ -489,9 +489,9 @@ def get_available_models():
 - Shared state via Redis
 
 **Vertical Scaling** (Planned):
-- DGX with H100 GPUs (80GB VRAM each)
+- DGX Spark (128GB unified memory each)
 - Enables larger models (405B, DeepSeek V3)
-- Higher throughput per GPU
+- Higher throughput
 
 ### DGX Integration (Future)
 
@@ -530,7 +530,7 @@ GET /health
 Response: {"status": "ready", "vram_used": "12.3 GB"}
 ```
 
-### Metrics (Optional)
+### Metrics 
 
 **Prometheus Integration**:
 - Request latency histograms
@@ -566,7 +566,7 @@ See [Security Guide](security.md) for comprehensive details.
 **Defense in Depth**:
 1. **Network**: Tailscale + Docker isolation
 2. **Authentication**: API keys
-3. **Authorization**: Rate limiting (future)
+3. **Authorization**: Rate limiting 
 4. **Container**: Non-root users, capability dropping
 5. **Data**: Local-only processing
 
@@ -594,7 +594,7 @@ See [Security Guide](security.md) for comprehensive details.
 ### Time-Based Scheduling
 - **Pro**: Predictable, simple
 - **Con**: Inflexible (can't run 72B during day)
-- **Mitigation**: Manual override (future feature)
+- **Mitigation**: Manual override 
 
 ### OpenAI API Compatibility
 - **Pro**: Easy integration, familiar
